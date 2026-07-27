@@ -67,11 +67,12 @@ function answerPerson(nama, data) {
 
   const lines = [];
   lines.push(`Data ${p.nama} (${p.divisi}) bulan ini:`);
-  if (kpi) lines.push(`- Skor KPI: ${fmtNum(kpi.skor)} (ranking ${kpi.ranking} dari ${data.kpiMonitoring.length})`);
-  lines.push(`- Kehadiran: ${fmtNum(p.kehadiranBulanIni)} hari`);
-  lines.push(`- Terlambat: ${fmtNum(p.terlambat)} kali, Izin: ${fmtNum(p.izin)}, Sakit: ${fmtNum(p.sakit)}, Alpha: ${fmtNum(p.alpha)}`);
-  if (p.cutiAktif) lines.push(`- Status: sedang CUTI`);
-  else if (p.dinasLuarAktif) lines.push(`- Status: sedang DINAS LUAR ke ${p.dinasLuarTujuan}`);
+  if (kpi && kpi.skor !== null) lines.push(`- Skor KPI: ${fmtNum(kpi.skor)} (ranking ${kpi.ranking} dari ${data.kpiMonitoring.length})`);
+  if (p.kehadiranBulanIni !== null) lines.push(`- Hari tercatat: ${fmtNum(p.kehadiranBulanIni)} hari`);
+  if (p.percent !== null) lines.push(`- Completion rate: ${fmtNum(p.percent)}%`);
+  if (p.totalWorkHours !== null) lines.push(`- Total jam kerja: ${fmtNum(p.totalWorkHours)} jam`);
+  if (p.cutiAktif) lines.push(`- Status: sedang CUTI (${p.dinasLuarTujuan})`);
+  else if (p.dinasLuarAktif) lines.push(`- Status: sedang DINAS LUAR (${p.dinasLuarTujuan})`);
   else lines.push(`- Status: aktif bekerja di cabang`);
   return lines.join('\n');
 }
@@ -256,14 +257,14 @@ const INTENTS = [
     handler(data) {
       const dinas = data.personel.filter(p => p.dinasLuarAktif);
       if (dinas.length === 0) return 'Tidak ada anggota tim yang sedang dinas luar saat ini.';
-      return ['Anggota tim yang sedang dinas luar:', ...dinas.map(p => `- ${p.nama} ke ${p.dinasLuarTujuan}`)].join('\n');
+      return ['Anggota tim yang sedang dinas luar:', ...dinas.map(p => `- ${p.nama}: ${p.dinasLuarTujuan}`)].join('\n');
     },
   },
   {
     id: 'kehadiran',
     keywords: ['kehadiran', 'absensi', 'tingkat kehadiran', 'hadir berapa'],
     handler(data) {
-      const lines = data.personel.map(p => `- ${p.nama}: hadir ${fmtNum(p.kehadiranBulanIni)} hari, terlambat ${fmtNum(p.terlambat)}x, izin ${fmtNum(p.izin)}, sakit ${fmtNum(p.sakit)}, alpha ${fmtNum(p.alpha)}`);
+      const lines = data.personel.map(p => `- ${p.nama}: ${fmtNum(p.kehadiranBulanIni)} hari tercatat, completion ${fmtNum(p.percent)}%`);
       return [`Kehadiran tim bulan ini:`, ...lines].join('\n');
     },
   },

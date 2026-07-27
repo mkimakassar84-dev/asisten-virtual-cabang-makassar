@@ -5,7 +5,9 @@
  *   1. Google Sheet "Sistem Integrasi Makassar 2026" via endpoint CSV export
  *      (tabs: Grand Data 2026, Stock GD MKS, PO Gudang, AR 2026, Delivery)
  *   2. Web App Google Apps Script "KPI-Personel-Cabang-Makassar" via fetch() JSON
- *      (BELUM TERSAMBUNG — menunggu WEBAPP_URL asli, lihat TODO di bawah)
+ *      (action=teamOverview) untuk skor/kehadiran per orang
+ *   3. Google Sheet "KPI Personel Cabang MKS" tab DINAS_CUTI via CSV export
+ *      untuk status cuti/dinas luar
  * ---------------------------------------------------------------------------
  */
 
@@ -19,12 +21,15 @@ const SHEET_GIDS = {
   delivery: '24678794',
 };
 
-// TODO: ganti dengan WEBAPP_URL asli dari repo KPI-Personel-Cabang-Makassar
-// (dibutuhkan untuk data KPI personel per-orang, kehadiran, cuti, dinas luar).
-const WEBAPP_URL = 'TODO_WEBAPP_URL_APPS_SCRIPT';
+const KPI_SHEET_ID = '1WSp2VmHs2LqCD16cMc8JI1l1HHfnP0MAgK-G_kf4Rqw';
+const KPI_SHEET_GIDS = {
+  dinasCuti: '572213901',
+};
 
-function csvExportUrl(gid) {
-  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
+const WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyZjdcOqCzQZ3i54Y2pAZVfbnMfuaEHmPFOaMhlpPqBgD958CWKTN5iujN4lPOkvJ43/exec';
+
+function csvExportUrl(gid, sheetId = SHEET_ID) {
+  return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
 }
 
 /** Parser CSV generik (menangani koma di dalam tanda kutip) -> array of arrays (rows mentah). */
@@ -76,16 +81,17 @@ function rowsToObjects(rows, headerIdx) {
   });
 }
 
-async function fetchCsvTab(gid, headerIdx = 0) {
-  const res = await fetch(csvExportUrl(gid), { cache: 'no-store' });
+async function fetchCsvTab(gid, headerIdx = 0, sheetId = SHEET_ID) {
+  const res = await fetch(csvExportUrl(gid, sheetId), { cache: 'no-store' });
   if (!res.ok) throw new Error(`Gagal mengambil tab (gid ${gid}): HTTP ${res.status}`);
   const text = await res.text();
   return rowsToObjects(parseCsvRows(text), headerIdx);
 }
 
-async function fetchWebAppJson() {
-  const res = await fetch(WEBAPP_URL, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`Gagal mengambil data personel: HTTP ${res.status}`);
+async function fetchTeamOverview(yearMonth) {
+  const url = `${WEBAPP_URL}?action=teamOverview&month=${yearMonth}`;
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Gagal mengambil data KPI personel: HTTP ${res.status}`);
   return res.json();
 }
 
@@ -119,29 +125,50 @@ function parseRupiah(s) {
 
 function monthKey(d) { return d.getFullYear() + '-' + d.getMonth(); }
 
-/** Data contoh (demo) untuk bagian yang belum tersambung ke sumber asli (KPI personel). */
-function buildDemoPersonnel() {
-  const kpiMonitoring = TEAM.map((p, i) => ({
-    nama: p.nama,
-    divisi: p.divisi,
-    skor: [92, 88, 95, 81, 90, 84, 78, 87][i],
-    ranking: 0,
-    kehadiran: [24, 22, 25, 20, 23, 21, 19, 22][i],
-  })).sort((a, b) => b.skor - a.skor).map((p, i) => ({ ...p, ranking: i + 1 }));
+/** Susun kpiMonitoring + personel dari teamOverview (webapp) dan DINAS_CUTI (sheet). */
+function buildPersonnelData(teamOverview, dinasCutiRaw) {
+  const now = new Date();
+  const byName = {};
+  teamOverview.forEach(p => { byName[p.nama] = p; });
 
-  const personel = TEAM.map((p, i) => ({
-    nama: p.nama,
-    divisi: p.divisi,
-    kehadiranBulanIni: [24, 22, 25, 20, 23, 21, 19, 22][i],
-    terlambat: [1, 0, 0, 3, 2, 1, 4, 1][i],
-    izin: [0, 1, 0, 1, 0, 0, 1, 0][i],
-    sakit: [1, 0, 1, 0, 1, 0, 0, 1][i],
-    alpha: [0, 0, 0, 1, 0, 0, 1, 0][i],
-    skorAkhir: [92, 88, 95, 81, 90, 84, 78, 87][i],
-    cutiAktif: i === 3,
-    dinasLuarAktif: i === 5,
-    dinasLuarTujuan: i === 5 ? 'Parepare' : null,
-  }));
+  const cutiAktifNow = {};
+  dinasCutiRaw.forEach(r => {
+    const mulai = parseIndoDate(r['TanggalMulai']);
+    const selesai = parseIndoDate(r['TanggalSelesai']);
+    if (!mulai || !selesai) return;
+    if (now >= mulai && now <= selesai) {
+      cutiAktifNow[r['Nama']] = r['Keterangan'] || 'Cuti/dinas luar';
+    }
+  });
+
+  const kpiMonitoring = TEAM.map(p => {
+    const t = byName[p.nama] || {};
+    return {
+      nama: p.nama,
+      divisi: p.divisi,
+      skor: t.skorAkhir ?? null,
+      ranking: 0,
+      kehadiran: t.countedDays ?? null,
+    };
+  }).sort((a, b) => (b.skor ?? -1) - (a.skor ?? -1)).map((p, i) => ({ ...p, ranking: i + 1 }));
+
+  const personel = TEAM.map(p => {
+    const t = byName[p.nama] || {};
+    const keterangan = cutiAktifNow[p.nama];
+    const isDinas = keterangan && /dinas/i.test(keterangan);
+    const isCuti = keterangan && !isDinas;
+    return {
+      nama: p.nama,
+      divisi: p.divisi,
+      kehadiranBulanIni: t.countedDays ?? null,
+      skorAkhir: t.skorAkhir ?? null,
+      percent: t.percent ?? null,
+      totalWorkHours: t.totalWorkHours ?? null,
+      cutiAktif: !!isCuti,
+      dinasLuarAktif: !!isDinas,
+      dinasLuarTujuan: keterangan || null,
+    };
+  });
 
   return { kpiMonitoring, personel };
 }
@@ -314,20 +341,19 @@ async function loadAllData() {
     return result;
   }
 
-  const isPersonnelConfigured = WEBAPP_URL !== 'TODO_WEBAPP_URL_APPS_SCRIPT';
-  if (isPersonnelConfigured) {
-    try {
-      const personnelJson = await fetchWebAppJson();
-      // TODO: mapping JSON personel asli -> { kpiMonitoring, personel } setelah struktur JSON diketahui.
-      Object.assign(result, personnelJson);
-    } catch (err) {
-      Object.assign(result, buildDemoPersonnel());
-      result.usingDemoData = true;
-      result.personnelError = err.message;
-    }
-  } else {
-    Object.assign(result, buildDemoPersonnel());
+  try {
+    const now = new Date();
+    const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const [teamOverview, dinasCutiRaw] = await Promise.all([
+      fetchTeamOverview(yearMonth),
+      fetchCsvTab(KPI_SHEET_GIDS.dinasCuti, 0, KPI_SHEET_ID),
+    ]);
+    Object.assign(result, buildPersonnelData(teamOverview, dinasCutiRaw));
+  } catch (err) {
     result.usingDemoData = true;
+    result.personnelError = err.message;
+    result.kpiMonitoring = [];
+    result.personel = [];
   }
 
   result.status = 'ready';
