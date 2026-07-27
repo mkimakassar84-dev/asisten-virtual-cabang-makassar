@@ -1,4 +1,4 @@
-const CACHE_NAME = 'asisten-makassar-v2';
+const CACHE_NAME = 'asisten-makassar-v3';
 const APP_SHELL = [
   './',
   './index.html',

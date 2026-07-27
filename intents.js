@@ -87,12 +87,12 @@ const INTENTS = [
     handler(data) {
       const { bulanIni, bulanLalu, targetBulanIni } = data.penjualan;
       const chg = pctChange(bulanIni, bulanLalu);
-      const target = targetBulanIni ? fmtPercent(bulanIni / targetBulanIni) : '-';
-      return [
+      const lines = [
         `Penjualan bulan ini: ${fmtNum(bulanIni)} transaksi.`,
         `Bulan lalu: ${fmtNum(bulanLalu)} transaksi (${chg >= 0 ? 'naik' : 'turun'} ${fmtPercent(Math.abs(chg))}).`,
-        `Pencapaian target: ${target} dari target ${fmtNum(targetBulanIni)} transaksi.`,
-      ].join('\n');
+      ];
+      if (targetBulanIni) lines.push(`Pencapaian target: ${fmtPercent(bulanIni / targetBulanIni)} dari target ${fmtNum(targetBulanIni)} transaksi.`);
+      return lines.join('\n');
     },
   },
   {
@@ -101,11 +101,24 @@ const INTENTS = [
     handler(data) {
       const { bulanIni, bulanLalu, targetBulanIni } = data.revenue;
       const chg = pctChange(bulanIni, bulanLalu);
-      const target = targetBulanIni ? fmtPercent(bulanIni / targetBulanIni) : '-';
-      return [
+      const lines = [
         `Revenue bulan ini: ${fmtRupiah(bulanIni)}.`,
         `Bulan lalu: ${fmtRupiah(bulanLalu)} (${chg >= 0 ? 'naik' : 'turun'} ${fmtPercent(Math.abs(chg))}).`,
-        `Pencapaian target: ${target} dari target ${fmtRupiah(targetBulanIni)}.`,
+      ];
+      if (targetBulanIni) lines.push(`Pencapaian target: ${fmtPercent(bulanIni / targetBulanIni)} dari target ${fmtRupiah(targetBulanIni)}.`);
+      return lines.join('\n');
+    },
+  },
+  {
+    id: 'performa-harian',
+    keywords: ['performa hari ini', 'penjualan hari ini', 'revenue hari ini', 'hasil hari ini', 'omzet hari ini', 'performa harian'],
+    handler(data) {
+      const hariIni = data.performaHarian[data.performaHarian.length - 1];
+      if (!hariIni) return 'Belum ada data performa harian.';
+      return [
+        `Performa terakhir (${fmtTanggal(hariIni.tanggal)}):`,
+        `- Penjualan: ${fmtNum(hariIni.sales)} transaksi`,
+        `- Revenue: ${fmtRupiah(hariIni.revenue)}`,
       ].join('\n');
     },
   },
@@ -145,15 +158,12 @@ const INTENTS = [
     keywords: ['piutang', 'account receivable', 'belum lunas', 'tagihan', ' ar '],
     handler(data) {
       const total = data.piutang.reduce((s, p) => s + p.nilai, 0);
-      const belumLunas = data.piutang.filter(p => p.status !== 'Lunas');
-      const terlambat = data.piutang.filter(p => p.status === 'Terlambat');
       const lines = data.piutang
         .slice()
-        .sort((a, b) => new Date(a.tanggalJatuhTempo) - new Date(b.tanggalJatuhTempo))
-        .map(p => `- ${p.customer}: ${fmtRupiah(p.nilai)}, jatuh tempo ${fmtTanggal(p.tanggalJatuhTempo)} (${p.status})`);
+        .sort((a, b) => b.nilai - a.nilai)
+        .map(p => `- ${p.customer}: ${fmtRupiah(p.nilai)}, umur ${p.aging || '-'} (${p.kategori || p.status})`);
       return [
-        `Total piutang: ${fmtRupiah(total)} dari ${data.piutang.length} customer.`,
-        `Belum lunas: ${belumLunas.length} customer, terlambat: ${terlambat.length} customer.`,
+        `Total piutang belum lunas: ${fmtRupiah(total)} dari ${data.piutang.length} customer (top 10):`,
         ...lines,
       ].join('\n');
     },
@@ -163,7 +173,7 @@ const INTENTS = [
     keywords: ['stok gudang', 'stock gudang', 'persediaan', 'sisa stok', 'stok barang'],
     handler(data) {
       const lines = data.stokGudang.map(s => `- ${s.item}: ${fmtNum(s.jumlah)} ${s.satuan}`);
-      return [`Stok gudang saat ini:`, ...lines].join('\n');
+      return [`Stok gudang saat ini (10 item terbanyak):`, ...lines].join('\n');
     },
   },
   {
@@ -179,12 +189,11 @@ const INTENTS = [
     keywords: ['turnover gudang', 'perputaran gudang', 'tingkat perputaran'],
     handler(data) {
       const t = data.turnoverGudang;
+      const lines = t.topItems.map(i => `- ${i.item}: ${fmtNum(i.turnover)}`);
       return [
-        `Turnover gudang:`,
-        `- Barang masuk: ${fmtNum(t.barangMasuk)}`,
-        `- Barang keluar: ${fmtNum(t.barangKeluar)}`,
-        `- Sisa stok: ${fmtNum(t.sisaStok)}`,
-        `- Tingkat perputaran: ${fmtPercent(t.tingkatPerputaran)}`,
+        `Total turnover gudang (MKI & CFN): ${fmtNum(t.totalTurnover)} unit.`,
+        `Item dengan turnover tertinggi:`,
+        ...lines,
       ].join('\n');
     },
   },
@@ -202,8 +211,12 @@ const INTENTS = [
     keywords: ['wilayah', 'per wilayah', 'daerah penjualan', 'area penjualan'],
     handler(data) {
       const sorted = [...data.wilayah].sort((a, b) => b.revenue - a.revenue);
-      const lines = sorted.map(w => `- ${w.nama}: ${fmtNum(w.sales)} penjualan, revenue ${fmtRupiah(w.revenue)}`);
-      return [`Performa per wilayah (tertinggi ke terendah):`, ...lines].join('\n');
+      const top = sorted.slice(0, 10);
+      const lines = top.map(w => `- ${w.nama}: ${fmtNum(w.sales)} penjualan, revenue ${fmtRupiah(w.revenue)}`);
+      const sisa = sorted.length - top.length;
+      const result = [`Top 10 wilayah (dari ${sorted.length} wilayah, tertinggi ke terendah):`, ...lines];
+      if (sisa > 0) result.push(`(dan ${sisa} wilayah lainnya)`);
+      return result.join('\n');
     },
   },
   {
@@ -219,8 +232,13 @@ const INTENTS = [
     id: 'fiber-optic',
     keywords: ['fiber optic', '1 core', '1-core', 'kabel fiber', 'fo 1 core'],
     handler(data) {
-      const lines = data.fiberOptic1Core.map(f => `- ${f.lokasi}: ${fmtNum(f.panjangKabel)} meter (${f.status})`);
-      return [`Fiber optic 1-core:`, ...lines].join('\n');
+      const f = data.fiberOptic1Core;
+      if (!f || !f.deskripsi) return 'Data fiber optic 1-core tidak ditemukan.';
+      return [
+        `${f.deskripsi}:`,
+        `- Total terjual: ${fmtNum(f.totalTerjual)} (revenue ${fmtRupiah(f.totalRevenue)})`,
+        `- Stok tersedia: ${f.stokTersedia === null ? '-' : fmtNum(f.stokTersedia)}`,
+      ].join('\n');
     },
   },
   {
